@@ -16,6 +16,7 @@ app.use(
   })
 );
 
+app.use('/api/paystack/webhook', express.raw({ type: '*/*' }));
 app.use(express.json());
 app.use('/api', router);
 
