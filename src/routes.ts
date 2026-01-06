@@ -1,14 +1,22 @@
 // backend/src/routes.ts
-import { Router, Request, Response } from 'express';
+import express, { Router, Request, Response } from 'express';
 import { v4 as uuid } from 'uuid';
 import { db } from './db';
 import { findPayment } from './ton';
+import fetch from 'node-fetch';
 
 const router = Router();
 
 /**
+ * SIDE NOTE:
+ * - Backend logic is USDT-only
+ * - UI can show NGN or USDT
+ * - Wallet balance is recorded server-side and persists after refresh
+ */
+
+/**
  * INTERNAL RATE
- * 1 USDT = 5 coins (unchanged)
+ * 1 USDT = 5 coins (unused, kept for reference)
  */
 const RATE = 5;
 
@@ -16,6 +24,16 @@ const RATE = 5;
  * TON treasury wallet
  */
 const TREASURY = process.env.TREASURY_ADDRESS!;
+const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY!;
+
+interface PaystackInitResponse {
+  status: boolean;
+  message: string;
+  data: {
+    authorization_url: string;
+    reference: string;
+  };
+}
 
 /* =========================
    HEALTH CHECK
@@ -35,28 +53,20 @@ router.post('/create-order', (req, res) => {
   }
 
   const orderId = uuid();
-  const coinAmount = tonAmount * RATE;
 
   // Track blockchain order
   db.run(
-    `INSERT INTO orders (id, wallet_address, ton_amount, coin_amount)
-     VALUES (?, ?, ?, ?)`,
-    [orderId, wallet, tonAmount, coinAmount]
+    `INSERT INTO transactions
+     (order_id, wallet, method, ton_amount, status)
+     VALUES (?, ?, 'ton', ?, 'pending')`,
+    [orderId, wallet, tonAmount]
   );
 
   // Ensure user exists
   db.run(
-    `INSERT OR IGNORE INTO users (wallet, coins)
+    `INSERT OR IGNORE INTO users (wallet, usdt_balance)
      VALUES (?, 0)`,
     [wallet]
-  );
-
-  // Transaction history
-  db.run(
-    `INSERT INTO transactions
-     (order_id, wallet, method, ton_amount, coin_amount, status)
-     VALUES (?, ?, 'ton', ?, ?, 'pending')`,
-    [orderId, wallet, tonAmount, coinAmount]
   );
 
   res.json({
@@ -84,19 +94,15 @@ router.post('/confirm', async (req, res) => {
 
       // TON verification
       if (tx.method === 'ton') {
-        const found = await findPayment(
-          TREASURY,
-          tx.ton_amount,
-          tx.order_id
-        );
+        const found = await findPayment(TREASURY, tx.ton_amount, tx.order_id);
         if (!found) return res.json({ status: 'pending' });
       }
 
-      // Credit coins if wallet exists
+      // Credit USDT
       if (tx.wallet) {
         db.run(
-          `UPDATE users SET coins = coins + ? WHERE wallet = ?`,
-          [tx.coin_amount, tx.wallet]
+          `UPDATE users SET usdt_balance = usdt_balance + ? WHERE wallet = ?`,
+          [tx.ton_amount || tx.usdt_amount, tx.wallet]
         );
       }
 
@@ -115,10 +121,10 @@ router.post('/confirm', async (req, res) => {
 ========================= */
 router.get('/balance/:wallet', (req, res) => {
   db.get(
-    `SELECT coins FROM users WHERE wallet = ?`,
+    `SELECT usdt_balance FROM users WHERE wallet = ?`,
     [req.params.wallet],
     (_err, row: any) => {
-      res.json({ coins: row?.coins || 0 });
+      res.json({ usdt_balance: row?.usdt_balance || 0 });
     }
   );
 });
@@ -129,7 +135,7 @@ router.get('/balance/:wallet', (req, res) => {
 router.get('/history/:wallet', (req, res) => {
   db.all(
     `SELECT order_id, method, ton_amount, naira_amount,
-            coin_amount, status, created_at
+            usdt_amount, status, created_at
      FROM transactions
      WHERE wallet = ?
      ORDER BY created_at DESC`,
@@ -139,50 +145,93 @@ router.get('/history/:wallet', (req, res) => {
 });
 
 /* =========================
-   PAYSTACK INIT (NO WALLET)
+   PAYSTACK INIT
    - Locks USDT rate
 ========================= */
-router.post('/paystack/init', (req, res) => {
-  const { email, nairaAmount, usdtAmount, usdtRate } = req.body;
+router.post('/paystack/init', async (req, res) => {
+  const { email, nairaAmount, usdtAmount } = req.body;
 
-  if (!email || !nairaAmount || !usdtAmount || !usdtRate) {
+  if (!email || !nairaAmount || !usdtAmount) {
     return res.status(400).json({ error: 'Invalid request' });
   }
 
-  const orderId = uuid();
-  const coinAmount = usdtAmount * RATE;
+  try {
+    const response = await fetch(
+      "https://api.paystack.co/transaction/initialize",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          email,
+          amount: nairaAmount * 100, // Paystack expects kobo
+          callback_url: "https://yourfrontend.com/callback",
+          metadata: { usdtAmount },
+        }),
+      }
+    );
 
-  db.run(
-    `INSERT INTO transactions
-     (order_id, method, naira_amount, usdt_amount, usdt_rate, coin_amount, status)
-     VALUES (?, 'paystack', ?, ?, ?, ?, 'pending')`,
-    [orderId, nairaAmount, usdtAmount, usdtRate, coinAmount]
-  );
+    const data = (await response.json()) as PaystackInitResponse;
 
-  res.json({
-    reference: orderId,
-    amount: nairaAmount * 100,
-    email,
-  });
+    if (!data.status)
+      return res.status(500).json({ error: 'Paystack initialization failed' });
+
+    // Save the transaction locally
+    db.run(
+      `INSERT INTO transactions
+       (order_id, method, naira_amount, usdt_amount, status)
+       VALUES (?, 'paystack', ?, ?, 'pending')`,
+      [data.data.reference, nairaAmount, usdtAmount]
+    );
+
+    res.json({
+      authorization_url: data.data.authorization_url,
+      reference: data.data.reference,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Paystack init error' });
+  }
 });
 
 /* =========================
-   PAYSTACK WEBHOOK (PRODUCTION SAFE)
+   PAYSTACK WEBHOOK
 ========================= */
-router.post('/paystack/webhook', (req, res) => {
-  const event = req.body;
+router.post(
+  '/paystack/webhook',
+  express.raw({ type: '*/*' }),
+  (req: Request, res: Response) => {
+    try {
+      const bodyBuffer = req.body as Buffer;
+      const event = JSON.parse(bodyBuffer.toString());
 
-  if (event.event !== 'charge.success') return res.sendStatus(200);
+      if (event.event !== 'charge.success') return res.sendStatus(200);
 
-  const reference = event.data.reference;
+      const reference = event.data.reference;
+      const usdtAmount = event.data.metadata?.usdtAmount || 0;
 
-  db.run(
-    `UPDATE transactions SET status='paid' WHERE order_id=?`,
-    [reference]
-  );
+      db.get(
+        `SELECT * FROM transactions WHERE order_id=?`,
+        [reference],
+        (_err, tx: any) => {
+          if (!tx || tx.status === 'paid') return res.sendStatus(200);
 
-  res.sendStatus(200);
-});
+          db.run(
+            `UPDATE transactions SET status='paid', usdt_amount=? WHERE order_id=?`,
+            [usdtAmount, reference]
+          );
+
+          res.sendStatus(200);
+        }
+      );
+    } catch (err) {
+      console.error(err);
+      res.sendStatus(500);
+    }
+  }
+);
 
 /* =========================
    LINK WALLET AFTER PAYSTACK
@@ -195,7 +244,7 @@ router.post('/link-wallet', (req, res) => {
   }
 
   db.run(
-    `INSERT OR IGNORE INTO users (wallet, coins)
+    `INSERT OR IGNORE INTO users (wallet, usdt_balance)
      VALUES (?, 0)`,
     [wallet]
   );
@@ -207,8 +256,8 @@ router.post('/link-wallet', (req, res) => {
       if (!tx) return res.status(404).json({ error: 'Payment not confirmed' });
 
       db.run(
-        `UPDATE users SET coins = coins + ? WHERE wallet = ?`,
-        [tx.coin_amount, wallet]
+        `UPDATE users SET usdt_balance = usdt_balance + ? WHERE wallet = ?`,
+        [tx.usdt_amount, wallet]
       );
 
       db.run(
