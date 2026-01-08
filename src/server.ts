@@ -18,7 +18,7 @@ app.use(
   })
 );
 
-app.options("*", cors());
+app.options("/*", cors());
 
 // ===== PAYSTACK WEBHOOK =====
 // ✅ Must use raw body to validate Paystack signature
