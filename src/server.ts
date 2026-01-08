@@ -12,22 +12,24 @@ const app = express();
 // ✅ Explicitly allow your frontend origin
 app.use(
   cors({
-    origin: ["https://terraminttoken.com", "http://localhost:5173"], // Add localhost for dev
+    origin: ["https://terraminttoken.com", "http://localhost:5173"],
     methods: ["GET", "POST", "OPTIONS"],
     allowedHeaders: ["Content-Type"],
   })
 );
 
+app.options("*", cors());
+
 // ===== PAYSTACK WEBHOOK =====
 // ✅ Must use raw body to validate Paystack signature
-app.use('/api/paystack/webhook', express.raw({ type: '*/*' }));
+app.use('/api/paystack/webhook', express.raw({ type: '*/*' }), router);
 
 // ===== JSON PARSER =====
 // ✅ For normal API requests
 app.use(express.json());
 
 // ===== API ROUTES =====
-app.use('/api', router);
+//app.use('/api', router);
 
 // ===== START SERVER =====
 const PORT = process.env.PORT || 3000;

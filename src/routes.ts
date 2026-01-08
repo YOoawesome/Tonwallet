@@ -53,7 +53,7 @@ router.post('/create-order', (req, res) => {
     orderId,
     payTo: TREASURY,
     amount: tonAmount,
-    memo: orderId,
+    payload: orderId,
   });
 });
 
