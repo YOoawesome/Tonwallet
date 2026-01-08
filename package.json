@@ -1,12 +1,11 @@
-
 {
   "name": "backend",
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "build": "npm install && tsc",
-    "dev": "nodemon --watch src --exec ts-node src/server.ts",
-    "start": "node dist/server.js"
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "dev": "nodemon --watch src --exec ts-node src/server.ts"
   },
   "keywords": [],
   "author": "",
@@ -30,4 +29,3 @@
   },
   "description": ""
 }
-

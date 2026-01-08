@@ -1,17 +1,10 @@
-import { Router } from 'express';
+import { Router, Request, Response } from 'express';
 import { v4 as uuid } from 'uuid';
 import { db } from './db';
 import { findPayment } from './ton';
 import fetch from 'node-fetch';
 
 const router = Router();
-
-/**
- * SIDE NOTE:
- * - Backend logic is USDT-only
- * - UI can show NGN or USDT
- * - Wallet balance is recorded server-side and persists after refresh
- */
 
 /**
  * TON treasury wallet
@@ -22,16 +15,15 @@ const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY!;
 /* =========================
    HEALTH CHECK
 ========================= */
-router.get('/test', (_req, res) => {
+router.get('/test', (_req: Request, res: Response) => {
   res.json({ status: 'alive' });
 });
 
 /* =========================
-   CREATE TON ORDER (WALLET REQUIRED)
+   CREATE TON ORDER
 ========================= */
-router.post('/create-order', (req, res) => {
-  const { wallet, tonAmount } = req.body;
-
+router.post('/create-order', (req: Request, res: Response) => {
+  const { wallet, tonAmount } = req.body as { wallet?: string; tonAmount?: number };
   if (!wallet || !tonAmount) return res.status(400).json({ error: 'Invalid request' });
 
   const orderId = uuid();
@@ -58,10 +50,10 @@ router.post('/create-order', (req, res) => {
 });
 
 /* =========================
-   CONFIRM PAYMENT (TON + PAYSTACK)
+   CONFIRM PAYMENT
 ========================= */
-router.post('/confirm', async (req, res) => {
-  const { orderId } = req.body;
+router.post('/confirm', async (req: Request, res: Response) => {
+  const { orderId } = req.body as { orderId?: string };
   if (!orderId) return res.status(400).json({ error: 'orderId required' });
 
   db.get(`SELECT * FROM transactions WHERE order_id = ?`, [orderId], async (_err, tx: any) => {
@@ -86,7 +78,7 @@ router.post('/confirm', async (req, res) => {
 /* =========================
    BALANCE
 ========================= */
-router.get('/balance/:wallet', (req, res) => {
+router.get('/balance/:wallet', (req: Request, res: Response) => {
   db.get(
     `SELECT usdt_balance FROM users WHERE wallet = ?`,
     [req.params.wallet],
@@ -99,22 +91,26 @@ router.get('/balance/:wallet', (req, res) => {
 /* =========================
    HISTORY
 ========================= */
-router.get('/history/:wallet', (req, res) => {
+router.get('/history/:wallet', (req: Request, res: Response) => {
   db.all(
     `SELECT order_id, method, ton_amount, naira_amount, usdt_amount, status, created_at
      FROM transactions
      WHERE wallet = ?
      ORDER BY created_at DESC`,
     [req.params.wallet],
-    (_err, rows) => res.json(rows || [])
+    (_err, rows: any[]) => res.json(rows || [])
   );
 });
 
 /* =========================
    PAYSTACK INIT
 ========================= */
-router.post('/paystack/init', async (req, res) => {
-  const { email, nairaAmount, usdtAmount } = req.body;
+router.post('/paystack/init', async (req: Request, res: Response) => {
+  const { email, nairaAmount, usdtAmount } = req.body as {
+    email?: string;
+    nairaAmount?: number;
+    usdtAmount?: number;
+  };
   if (!email || !nairaAmount || !usdtAmount)
     return res.status(400).json({ error: 'Invalid request' });
 
@@ -127,14 +123,13 @@ router.post('/paystack/init', async (req, res) => {
       },
       body: JSON.stringify({
         email,
-        amount: nairaAmount * 100, // Paystack expects kobo
-        callback_url: "https://yourfrontend.com/callback", // optional
+        amount: nairaAmount * 100,
+        callback_url: "https://yourfrontend.com/callback",
         metadata: { usdtAmount },
       }),
     });
 
     const data: any = await response.json();
-
     if (!data?.status) return res.status(500).json({ error: 'Paystack initialization failed' });
 
     db.run(
@@ -157,7 +152,7 @@ router.post('/paystack/init', async (req, res) => {
 /* =========================
    PAYSTACK WEBHOOK
 ========================= */
-router.post('/paystack/webhook', (req, res) => {
+router.post('/paystack/webhook', (req: Request, res: Response) => {
   try {
     const event: any = JSON.parse(req.body.toString());
     if (event.event !== 'charge.success') return res.sendStatus(200);
@@ -184,8 +179,8 @@ router.post('/paystack/webhook', (req, res) => {
 /* =========================
    LINK WALLET AFTER PAYSTACK
 ========================= */
-router.post('/link-wallet', (req, res) => {
-  const { orderId, wallet } = req.body;
+router.post('/link-wallet', (req: Request, res: Response) => {
+  const { orderId, wallet } = req.body as { orderId?: string; wallet?: string };
   if (!orderId || !wallet) return res.status(400).json({ error: 'Invalid request' });
 
   db.run(`INSERT OR IGNORE INTO users (wallet, usdt_balance) VALUES (?, 0)`, [wallet]);
