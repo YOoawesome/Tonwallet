@@ -1,9 +1,10 @@
+
 {
   "name": "backend",
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "build": "npm install --only=dev && tsc",
+    "build": "npm install && tsc",
     "dev": "nodemon --watch src --exec ts-node src/server.ts",
     "start": "node dist/server.js"
   },
@@ -29,3 +30,4 @@
   },
   "description": ""
 }
+
