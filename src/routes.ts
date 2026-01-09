@@ -111,14 +111,19 @@ router.post('/paystack/init', async (req: Request, res: Response) => {
     nairaAmount?: number;
     usdtAmount?: number;
   };
-  if (!email || !nairaAmount || !usdtAmount)
+
+  if (!email || !nairaAmount || !usdtAmount) {
+    console.log("Invalid request body", req.body);
     return res.status(400).json({ error: 'Invalid request' });
+  }
 
   try {
+    console.log("Initializing Paystack transaction:", email, nairaAmount, usdtAmount);
+
     const response = await fetch("https://api.paystack.co/transaction/initialize", {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${PAYSTACK_SECRET_KEY}`,
+        "Authorization": `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -130,6 +135,8 @@ router.post('/paystack/init', async (req: Request, res: Response) => {
     });
 
     const data: any = await response.json();
+    console.log("Paystack response:", data);
+
     if (!data?.status) return res.status(500).json({ error: 'Paystack initialization failed' });
 
     db.run(
@@ -144,10 +151,11 @@ router.post('/paystack/init', async (req: Request, res: Response) => {
       reference: data.data.reference,
     });
   } catch (err) {
-    console.error(err);
+    console.error("Paystack init error:", err);
     res.status(500).json({ error: 'Paystack init error' });
   }
 });
+
 
 /* =========================
    PAYSTACK WEBHOOK
