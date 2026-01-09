@@ -2,6 +2,9 @@ import express from 'express';
 import cors from 'cors';
 import { initDb } from './db';
 import { router } from './routes';
+import dotenv from 'dotenv';
+dotenv.config(); // This loads your .env variables
+
 
 /**
  * SIDE NOTES:
