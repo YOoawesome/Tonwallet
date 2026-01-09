@@ -124,7 +124,7 @@ router.post('/paystack/init', async (req: Request, res: Response) => {
       body: JSON.stringify({
         email,
         amount: nairaAmount * 100,
-        callback_url: "https://yourfrontend.com/callback",
+        callback_url: "https://terraminttoken.com/callback",
         metadata: { usdtAmount },
       }),
     });
