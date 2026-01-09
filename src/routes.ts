@@ -105,56 +105,91 @@ router.get('/history/:wallet', (req: Request, res: Response) => {
 /* =========================
    PAYSTACK INIT
 ========================= */
+/* =========================
+   PAYSTACK INIT - DEBUGGED
+========================= */
+
+/**
+ * SIDE NOTE:
+ * - This endpoint initializes a Paystack transaction
+ * - Expects: email (string), nairaAmount (number), usdtAmount (number)
+ * - Returns: authorization_url & reference on success
+ * - Logs all errors to console for easier debugging
+ */
+
 router.post('/paystack/init', async (req: Request, res: Response) => {
-  const { email, nairaAmount, usdtAmount } = req.body as {
-    email?: string;
-    nairaAmount?: number;
-    usdtAmount?: number;
-  };
-
-  if (!email || !nairaAmount || !usdtAmount) {
-    console.log("Invalid request body", req.body);
-    return res.status(400).json({ error: 'Invalid request' });
-  }
-
   try {
-    console.log("Initializing Paystack transaction:", email, nairaAmount, usdtAmount);
+    const { email, nairaAmount, usdtAmount } = req.body as {
+      email?: string;
+      nairaAmount?: number;
+      usdtAmount?: number;
+    };
 
+    // ===== VALIDATION =====
+    if (!email || !nairaAmount || !usdtAmount) {
+      console.error('[PAYSTACK INIT] Missing fields:', req.body);
+      return res.status(400).json({ error: 'Missing required fields: email, nairaAmount, usdtAmount' });
+    }
+
+    if (typeof nairaAmount !== 'number' || nairaAmount <= 0) {
+      return res.status(400).json({ error: 'nairaAmount must be a positive number' });
+    }
+
+    if (typeof usdtAmount !== 'number' || usdtAmount <= 0) {
+      return res.status(400).json({ error: 'usdtAmount must be a positive number' });
+    }
+
+    if (!/^\S+@\S+\.\S+$/.test(email)) {
+      return res.status(400).json({ error: 'Invalid email format' });
+    }
+
+    // ===== INITIALIZE PAYSTACK =====
     const response = await fetch("https://api.paystack.co/transaction/initialize", {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
+        "Authorization": `Bearer ${PAYSTACK_SECRET_KEY}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
         email,
-        amount: nairaAmount * 100,
-        callback_url: "https://terraminttoken.com/callback",
+        amount: Math.round(nairaAmount * 100), // Paystack expects kobo
+        currency: "NGN",
+        callback_url: "https://terraminttoken.com/callback", // update as needed
         metadata: { usdtAmount },
       }),
     });
 
     const data: any = await response.json();
-    console.log("Paystack response:", data);
 
-    if (!data?.status) return res.status(500).json({ error: 'Paystack initialization failed' });
+    // ===== CHECK PAYSTACK RESPONSE =====
+    if (!data || !data.status) {
+      console.error('[PAYSTACK INIT] Failed response from Paystack:', data);
+      return res.status(500).json({ error: 'Paystack initialization failed', details: data });
+    }
 
+    // ===== RECORD TRANSACTION LOCALLY =====
     db.run(
       `INSERT INTO transactions
        (order_id, method, naira_amount, usdt_amount, status)
        VALUES (?, 'paystack', ?, ?, 'pending')`,
-      [data.data.reference, nairaAmount, usdtAmount]
+      [data.data.reference, nairaAmount, usdtAmount],
+      (err) => {
+        if (err) console.error('[PAYSTACK INIT] DB insert error:', err);
+      }
     );
 
+    // ===== RETURN AUTH URL =====
     res.json({
       authorization_url: data.data.authorization_url,
       reference: data.data.reference,
     });
+
   } catch (err) {
-    console.error("Paystack init error:", err);
-    res.status(500).json({ error: 'Paystack init error' });
+    console.error('[PAYSTACK INIT] Exception:', err);
+    res.status(500).json({ error: 'Internal server error', details: err });
   }
 });
+
 
 
 /* =========================
