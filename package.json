@@ -8,13 +8,13 @@
     "start": "node dist/server.js"
   },
   "dependencies": {
+    "@types/node": "^25.0.3",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
-    "express": "^4.21.2",
+    "express": "^4.22.1",
     "node-fetch": "^3.3.2",
     "sqlite3": "^5.1.7",
-    "uuid": "^13.0.0",
-    "@types/node": "^25.0.3"
+    "uuid": "^13.0.0"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",
