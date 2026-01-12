@@ -29,7 +29,8 @@ router.get("/balance/:wallet", async (req, res) => {
 // ===== Initialize USDT Payment via TON =====
 router.post("/usdt/init", async (req, res) => {
   const { wallet, usdtAmount } = req.body;
-  if (!wallet || !usdtAmount) return res.status(400).json({ error: "Invalid request" });
+  if (!wallet || !usdtAmount || Number(usdtAmount) <= 0)
+    return res.status(400).json({ error: "Invalid request" });
 
   const orderId = uuid();
 
@@ -46,11 +47,17 @@ router.post("/usdt/init", async (req, res) => {
   // Get the Jetton wallet to send USDT
   const jettonWallet = await getJettonWallet(wallet);
 
-  // Build payload for frontend to call TON transaction
+  // Convert USDT amount to TON nanograms
+  // Example: 1 USDT = 0.05 TON → 0.05 * 1e9 nanograms = 50_000_000
+  const TON_PER_USDT = 0.05; // adjust to your actual rate
+  const jettonAmount = Math.floor(Number(usdtAmount) * TON_PER_USDT * 1_000_000_000); // integer nanograms
+
+  // Optional: build payload if you need extra info
   const payload = buildUsdtPayload(Number(usdtAmount), TREASURY, wallet);
 
-  res.json({ orderId, jettonWallet, payload });
+  res.json({ orderId, jettonWallet, jettonAmount, payload });
 });
+
 
 // ===== Confirm USDT Payment =====
 router.post("/usdt/confirm", async (req, res) => {
