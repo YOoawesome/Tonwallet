@@ -60,6 +60,7 @@ router.post("/usdt/init", async (req, res) => {
 
     // 3️⃣ Build payload → base64
     const payload = buildUsdtPayload(jettonAmount, TREASURY, wallet);
+  console.log('payload...', payload)
 
     res.json({
       orderId,
@@ -77,6 +78,9 @@ router.post("/usdt/init", async (req, res) => {
 router.post("/usdt/confirm", (req, res) => {
   const { orderId } = req.body;
   if (!orderId) return res.status(400).json({ error: "orderId required" });
+
+
+  console.log('order...', orderId)
 
   db.get(
     `SELECT * FROM transactions WHERE order_id=? AND status='pending'`,
