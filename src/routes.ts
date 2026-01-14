@@ -16,9 +16,14 @@ import {
   buildUsdtPayload,
   findUsdtJettonTransfer
 } from "./jetton";
+import debug from "debug";
 
 const router = Router();
 
+
+  
+ 
+const log = debug("wallet:routes");
 // =======================
 // ENV
 // =======================
@@ -29,6 +34,7 @@ if (!TREASURY) throw new Error("TREASURY_ADDRESS not set");
 // HEALTH CHECK
 // =======================
 router.get("/test", (_req, res) => {
+  
   res.json({ status: "alive" });
 });
 
@@ -36,6 +42,7 @@ router.get("/test", (_req, res) => {
 // FETCH USER BALANCE
 // =======================
 router.get("/balance/:wallet", (req, res) => {
+   log("Incoming /usdt/init request:", req.body);
   const wallet = req.params.wallet;
 
   db.get(
@@ -62,10 +69,11 @@ router.post("/usdt/init", async (req, res) => {
 
   try {
     const { wallet, usdtAmount } = req.body;
+    
 
     if (!wallet || !usdtAmount || Number(usdtAmount) <= 0) {
       return res.status(400).json({ error: "Invalid request" });
-    }
+    } 
 
     const orderId = uuid();
 
@@ -87,6 +95,7 @@ router.post("/usdt/init", async (req, res) => {
     // 1️⃣ Resolve user's Jetton wallet
     // =======================
     const jettonWalletRaw = await getJettonWallet(wallet);
+    console.log("Resolved Jetton wallet:", jettonWalletRaw);
 
     const jettonWallet = Address.parse(jettonWalletRaw).toString({
       bounceable: true,
@@ -97,7 +106,7 @@ router.post("/usdt/init", async (req, res) => {
     // 2️⃣ Convert USDT → jetton units (6 decimals)
     // =======================
     const jettonAmount = Math.floor(Number(usdtAmount) * 1_000_000);
-
+      console.log("Jetton amount:", jettonAmount);
     // =======================
     // 3️⃣ Build Jetton transfer payload
     // =======================
@@ -112,6 +121,17 @@ router.post("/usdt/init", async (req, res) => {
       TREASURY,
       wallet
     );
+    console.log("Payload built:", payload);
+ console.log("===== USDT INIT DEBUG =====");
+console.log("USER WALLET:", wallet);
+console.log("JETTON WALLET:", jettonWallet);
+console.log("TREASURY:", TREASURY);
+console.log("JETTON AMOUNT:", jettonAmount);
+console.log("PAYLOAD TYPE:", typeof payload);
+console.log("PAYLOAD LENGTH:", payload.length);
+console.log("PAYLOAD (first 50 chars):", payload.slice(0, 50));
+console.log("BASE64 SAFE:", /^[A-Za-z0-9+/=]+$/.test(payload));
+console.log("===========================");
 
     // =======================
     // RESPONSE
@@ -127,6 +147,11 @@ router.post("/usdt/init", async (req, res) => {
     res.status(500).json({ error: "USDT init failed" });
   }
 });
+
+if (process.env.NODE_ENV !== "production") {
+  console.log("Debug mode active");
+}
+
 
 // =======================
 // CONFIRM USDT PAYMENT
