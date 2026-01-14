@@ -10,6 +10,7 @@ import { v4 as uuid } from "uuid";
 import express from "express";
 import { db } from "./db";
 import { Address } from "@ton/core";
+import dotenv from "dotenv";
 import {
   getJettonWallet,
   buildUsdtPayload,
@@ -91,7 +92,7 @@ router.post("/usdt/init", async (req, res) => {
       bounceable: true,
       testOnly: false
     });
-
+    
     // =======================
     // 2️⃣ Convert USDT → jetton units (6 decimals)
     // =======================

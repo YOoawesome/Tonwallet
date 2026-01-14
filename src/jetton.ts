@@ -1,7 +1,8 @@
+// backend/jetton.ts
 /**
  * Jetton utilities for USDT transfers on TON blockchain
  * Production-ready using JSON-RPC runGetMethod
- * Fully TypeScript-safe
+ * Fully TypeScript-safe and VS Code-green
  */
 
 import { Address, Cell, beginCell } from "ton-core";
@@ -23,7 +24,9 @@ function getEnv(name: string): string {
 // CONFIG VARIABLES
 // =======================
 const TON_RPC_URL: string = getEnv("TON_RPC_URL");
-const USDT_JETTON_MASTER: Address = Address.parse(getEnv("USDT_JETTON_MASTER"));
+const USDT_JETTON_MASTER: Address = Address.parse(
+  getEnv("USDT_JETTON_MASTER")
+);
 
 // =======================
 // HELPER: JSON-RPC runGetMethod
@@ -33,6 +36,11 @@ async function runGetMethodRpc(
   method: string,
   stack: { type: string; cell?: string }[] = []
 ) {
+  /**
+   * SIDE NOTE:
+   * Sends a raw JSON-RPC runGetMethod to the TON RPC endpoint.
+   * Returns the stack for parsing.
+   */
   const body = {
     id: 1,
     jsonrpc: "2.0",
@@ -55,34 +63,49 @@ async function runGetMethodRpc(
 // BUILD USDT TRANSFER PAYLOAD
 // =======================
 export function buildUsdtPayload(
-  amount: number,
+  jettonAmount: number,
   treasury: string,
   userWallet: string
 ): string {
   const transferCell = beginCell()
-    .storeUint(0x01, 32) // Transfer op code
-    .storeCoins(BigInt(amount) * 1_000_000n) // Amount in smallest units (6 decimals)
-    .storeAddress(Address.parse(userWallet)) // Recipient
-    .storeAddress(Address.parse(treasury)) // Treasury
+    .storeUint(0xf8a7ea5, 32) // ✅ Jetton transfer opcode
+    .storeUint(0, 64)        // ✅ query_id
+    .storeCoins(BigInt(jettonAmount))
+    .storeAddress(Address.parse(treasury))
+    .storeAddress(Address.parse(userWallet))
+    .storeBit(false)
+    .storeCoins(0n)
+    .storeBit(false)
     .endCell();
 
   return transferCell.toBoc({ idx: false }).toString("base64");
 }
 
+
 // =======================
 // GET USER JETTON WALLET
 // =======================
-export async function getJettonWallet(userWallet: string): Promise<string> {
+export async function getJettonWallet(
+  userWallet: string
+): Promise<string> {
   const userAddr: Address = Address.parse(userWallet);
 
   const stack = [
     {
       type: "cell",
-      cell: beginCell().storeAddress(userAddr).endCell().toBoc({ idx: false }).toString("base64"),
+      cell: beginCell()
+        .storeAddress(userAddr)
+        .endCell()
+        .toBoc({ idx: false })
+        .toString("base64"),
     },
   ];
 
-  const result = await runGetMethodRpc(USDT_JETTON_MASTER.toString(), "get_wallet_address", stack);
+  const result = await runGetMethodRpc(
+    USDT_JETTON_MASTER.toString(),
+    "get_wallet_address",
+    stack
+  );
 
   if (!result.stack?.length) throw new Error("Failed to fetch Jetton wallet");
 
@@ -91,7 +114,7 @@ export async function getJettonWallet(userWallet: string): Promise<string> {
 
   const cell: Cell = Cell.fromBoc(Buffer.from(cellBoc, "base64"))[0];
   const slice = cell.beginParse();
-  const addr = slice.loadAddress();
+  const addr = slice.loadAddress(); // <--- loadAddress() not readAddress()
 
   if (!addr) throw new Error("Failed to parse Jetton wallet");
 
@@ -106,7 +129,11 @@ export async function findUsdtJettonTransfer(
   expectedAmount: number
 ): Promise<boolean> {
   const jettonWallet = await getJettonWallet(userWallet);
-  const result = await runGetMethodRpc(jettonWallet, "get_transaction_history");
+
+  const result = await runGetMethodRpc(
+    jettonWallet,
+    "get_transaction_history"
+  );
 
   const expected: bigint = BigInt(expectedAmount) * 1_000_000n;
 
@@ -120,3 +147,5 @@ export async function findUsdtJettonTransfer(
   }
   return false;
 }
+
+
