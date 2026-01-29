@@ -1,206 +1,184 @@
 // backend/routes.ts
-/**
- * ROUTES
- * Handles USDT Jetton payments via TON + balance tracking
- * All payloads are generated server-side and passed raw to frontend
- */
-
 import { Router } from "express";
 import { v4 as uuid } from "uuid";
-import express from "express";
 import { db } from "./db";
+import express from "express";
 import { Address } from "@ton/core";
-import dotenv from "dotenv";
 import {
+  findUsdtJettonTransfer,
   getJettonWallet,
-  buildUsdtPayload,
-  findUsdtJettonTransfer
+  buildUsdtPayload
 } from "./jetton";
-import debug from "debug";
 
 const router = Router();
 
-
-  
- 
-const log = debug("wallet:routes");
-// =======================
-// ENV
-// =======================
 const TREASURY = process.env.TREASURY_ADDRESS!;
-if (!TREASURY) throw new Error("TREASURY_ADDRESS not set");
+const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY!;
 
-// =======================
-// HEALTH CHECK
-// =======================
-router.get("/test", (_req, res) => {
-  
-  res.json({ status: "alive" });
-});
 
-// =======================
-// FETCH USER BALANCE
-// =======================
+// ===== Health =====
+router.get("/test", (_req, res) => res.json({ status: "alive" }));
+
+// ===== Wallet Balance =====
 router.get("/balance/:wallet", (req, res) => {
-   log("Incoming /usdt/init request:", req.body);
-  const wallet = req.params.wallet;
-
   db.get(
     `SELECT usdt_balance FROM users WHERE wallet=?`,
-    [wallet],
+    [req.params.wallet],
     (_err, row: any) => {
       res.json({ usdt_balance: row?.usdt_balance || 0 });
     }
   );
 });
 
-// =======================
-// INIT USDT PAYMENT (TON JETTON)
-// =======================
+// ===== INIT USDT PAYMENT =====
 router.post("/usdt/init", async (req, res) => {
-  /**
-   * SIDE NOTE:
-   * This endpoint:
-   * 1. Creates an order
-   * 2. Resolves user's Jetton wallet
-   * 3. Builds a VALID Jetton transfer payload (base64)
-   * 4. Returns everything needed for TonConnect sendTransaction
-   */
-
   try {
     const { wallet, usdtAmount } = req.body;
-    
-
     if (!wallet || !usdtAmount || Number(usdtAmount) <= 0) {
       return res.status(400).json({ error: "Invalid request" });
-    } 
+    }
 
     const orderId = uuid();
 
-    // Store transaction
     db.run(
       `INSERT INTO transactions (order_id, wallet, method, usdt_amount, status)
        VALUES (?, ?, 'usdt_jetton', ?, 'pending')`,
       [orderId, wallet, usdtAmount]
     );
 
-    // Ensure user exists
-    db.run(
-      `INSERT OR IGNORE INTO users (wallet, usdt_balance)
-       VALUES (?, 0)`,
-      [wallet]
-    );
+    db.run(`INSERT OR IGNORE INTO users (wallet, usdt_balance) VALUES (?, 0)`, [wallet]);
 
-    // =======================
-    // 1️⃣ Resolve user's Jetton wallet
-    // =======================
+    // 1️⃣ User jetton wallet
     const jettonWalletRaw = await getJettonWallet(wallet);
-    console.log("Resolved Jetton wallet:", jettonWalletRaw);
-
     const jettonWallet = Address.parse(jettonWalletRaw).toString({
       bounceable: true,
-      testOnly: false
+      testOnly: false,
     });
-    
-    // =======================
-    // 2️⃣ Convert USDT → jetton units (6 decimals)
-    // =======================
-    const jettonAmount = Math.floor(Number(usdtAmount) * 1_000_000);
-      console.log("Jetton amount:", jettonAmount);
-    // =======================
-    // 3️⃣ Build Jetton transfer payload
-    // =======================
-    /**
-     * SIDE NOTE:
-     * buildUsdtPayload RETURNS base64 already.
-     * DO NOT encode again.
-     * DO NOT stringify.
-     */
-    const payload = buildUsdtPayload(
-      jettonAmount,
-      TREASURY,
-      wallet
-    );
-    console.log("Payload built:", payload);
- console.log("===== USDT INIT DEBUG =====");
-console.log("USER WALLET:", wallet);
-console.log("JETTON WALLET:", jettonWallet);
-console.log("TREASURY:", TREASURY);
-console.log("JETTON AMOUNT:", jettonAmount);
-console.log("PAYLOAD TYPE:", typeof payload);
-console.log("PAYLOAD LENGTH:", payload.length);
-console.log("PAYLOAD (first 50 chars):", payload.slice(0, 50));
-console.log("BASE64 SAFE:", /^[A-Za-z0-9+/=]+$/.test(payload));
-console.log("===========================");
 
-    // =======================
-    // RESPONSE
-    // =======================
+    // 2️⃣ Convert USDT → jetton units (6 decimals)
+    const jettonAmount = Math.floor(Number(usdtAmount) * 1e6);
+
+    // 3️⃣ Build payload → base64
+    const payload = buildUsdtPayload(jettonAmount, TREASURY, wallet);
+  console.log('payload...', payload)
+
     res.json({
       orderId,
       jettonWallet,
       jettonAmount,
-      payload
+      payload,
     });
-  } catch (err) {
-    console.error("USDT INIT ERROR:", err);
+  } catch (e) {
+    console.error(e);
     res.status(500).json({ error: "USDT init failed" });
   }
 });
 
-if (process.env.NODE_ENV !== "production") {
-  console.log("Debug mode active");
-}
-
-
-// =======================
-// CONFIRM USDT PAYMENT
-// =======================
+// ===== CONFIRM PAYMENT =====
 router.post("/usdt/confirm", (req, res) => {
-  /**
-   * SIDE NOTE:
-   * Polls blockchain to confirm Jetton transfer
-   * Credits user balance once detected
-   */
-
   const { orderId } = req.body;
-  if (!orderId) {
-    return res.status(400).json({ error: "orderId required" });
-  }
+  if (!orderId) return res.status(400).json({ error: "orderId required" });
+
+
+  console.log('order...', orderId)
 
   db.get(
-    `SELECT * FROM transactions
-     WHERE order_id=? AND status='pending'`,
+    `SELECT * FROM transactions WHERE order_id=? AND status='pending'`,
     [orderId],
     async (_err, tx: any) => {
       if (!tx) return res.json({ status: "not_found" });
 
-      const confirmed = await findUsdtJettonTransfer(
-        tx.wallet,
-        tx.usdt_amount
-      );
+      const confirmed = await findUsdtJettonTransfer(tx.wallet, tx.usdt_amount);
 
-      if (!confirmed) {
-        return res.json({ status: "pending" });
-      }
+      if (!confirmed) return res.json({ status: "pending" });
 
-      // Credit balance
-      db.run(
-        `UPDATE users
-         SET usdt_balance = usdt_balance + ?
-         WHERE wallet=?`,
-        [tx.usdt_amount, tx.wallet]
-      );
-
-      // Mark paid
-      db.run(
-        `UPDATE transactions
-         SET status='paid'
-         WHERE order_id=?`,
-        [orderId]
-      );
+      db.run(`UPDATE users SET usdt_balance = usdt_balance + ? WHERE wallet=?`, [tx.usdt_amount, tx.wallet]);
+      db.run(`UPDATE transactions SET status='paid' WHERE order_id=?`, [orderId]);
 
       res.json({ status: "paid" });
+    }
+  );
+});
+
+
+// ===== Paystack Init =====
+router.post("/paystack/init", async (req, res) => {
+  const { email, nairaAmount, usdtAmount } = req.body;
+  if (!email || !nairaAmount || !usdtAmount)
+    return res.status(400).json({ error: "Missing fields" });
+
+  const reference = uuid(); // Local reference
+  db.run(
+    `INSERT INTO transactions (order_id, method, naira_amount, usdt_amount, status)
+     VALUES (?, 'paystack', ?, ?, 'pending')`,
+    [reference, nairaAmount, usdtAmount]
+  );
+
+  res.json({ reference });
+});
+
+// ===== Paystack Webhook =====
+router.post("/paystack/webhook", express.raw({ type: "*/*" }), (req, res) => {
+  try {
+    const event = JSON.parse(req.body.toString());
+
+    if (event.event === "charge.success") {
+      const reference = event.data.reference;
+      const usdtAmount = event.data.metadata?.usdtAmount || 0;
+
+      db.get(
+        `SELECT * FROM transactions WHERE order_id=?`,
+        [reference],
+        (_err, tx: any) => {
+          if (!tx || tx.status === "paid") return res.sendStatus(200);
+
+          // Mark transaction as paid
+          db.run(
+            `UPDATE transactions SET status='paid', usdt_amount=? WHERE order_id=?`,
+            [usdtAmount, reference]
+          );
+
+          // Update user's wallet balance if wallet exists
+          if (tx.wallet) {
+            db.run(
+              `UPDATE users SET usdt_balance = usdt_balance + ? WHERE wallet=?`,
+              [usdtAmount, tx.wallet]
+            );
+          }
+
+          res.sendStatus(200);
+        }
+      );
+    } else {
+      res.sendStatus(200);
+    }
+  } catch (err) {
+    console.error(err);
+    res.sendStatus(500);
+  }
+});
+
+// ===== Link Wallet after Paystack =====
+router.post("/link-wallet", (req, res) => {
+  const { orderId, wallet } = req.body;
+  if (!orderId || !wallet) return res.status(400).json({ error: "Invalid request" });
+
+  db.run(`INSERT OR IGNORE INTO users (wallet, usdt_balance) VALUES (?, 0)`, [wallet]);
+
+  db.get(
+    `SELECT * FROM transactions WHERE order_id=? AND status='paid'`,
+    [orderId],
+    (_err, tx: any) => {
+      if (!tx) return res.status(404).json({ error: "Payment not confirmed" });
+
+      db.run(
+        `UPDATE users SET usdt_balance = usdt_balance + ? WHERE wallet=?`,
+        [tx.usdt_amount, wallet]
+      );
+
+      db.run(`UPDATE transactions SET wallet=? WHERE order_id=?`, [wallet, orderId]);
+
+      res.json({ status: "wallet_linked" });
     }
   );
 });
